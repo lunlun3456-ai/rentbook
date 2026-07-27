@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Rent Book — Receipts &amp; Reminders</title>
+<meta name="theme-color" content="#1f4d43" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="lock-screen" id="lockScreen">
+  <div class="lock-card">
+    <span class="brand-mark lock-mark">RB</span>
+    <h2 id="lockTitle">Enter password</h2>
+    <p class="hint" id="lockHint">Unlock Rent Book on this device.</p>
+    <input type="password" id="lockPassword" placeholder="Password" autocomplete="current-password" />
+    <input type="password" id="lockPasswordConfirm" placeholder="Confirm password" autocomplete="new-password" hidden />
+    <p class="lock-error" id="lockError" hidden></p>
+    <button class="btn btn-primary" id="lockSubmitBtn">Unlock</button>
+  </div>
+</div>
+
+<div class="app" id="appRoot">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">RB</span>
+      <div>
+        <h1>Rent Book</h1>
+        <p class="tag">receipts &amp; reminders, sent on WhatsApp</p>
+      </div>
+    </div>
+    <div class="sync-pill" id="syncPill" title="Sync status">
+      <span class="dot" id="syncDot"></span>
+      <span id="syncLabel">Local only</span>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="home">Home</button>
+    <button class="tab" data-tab="tenants">Tenants</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+
+    <!-- HOME: reminders + quick receipt -->
+    <section class="panel active" id="panel-home">
+
+      <div class="section-head">
+        <h2>Due &amp; overdue</h2>
+        <span class="muted" id="reminderCount"></span>
+      </div>
+      <div id="reminderList" class="card-list"></div>
+      <p class="empty-note" id="reminderEmpty" hidden>Nobody's due right now. Check back closer to rent day.</p>
+
+      <div class="section-head" style="margin-top:28px">
+        <h2>Send a receipt</h2>
+      </div>
+      <div class="receipt-form card">
+        <label class="field">
+          <span>Tenant</span>
+          <select id="receiptTenant"></select>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Amount</span>
+            <input type="number" id="receiptAmount" inputmode="decimal" placeholder="0.00" />
+          </label>
+          <label class="field">
+            <span>Date paid</span>
+            <input type="date" id="receiptDate" />
+          </label>
+        </div>
+        <label class="field">
+          <span>For period (optional)</span>
+          <input type="text" id="receiptPeriod" placeholder="e.g. August 2026" />
+        </label>
+        <label class="field">
+          <span>Note (optional)</span>
+          <input type="text" id="receiptNote" placeholder="e.g. Paid via bank transfer" />
+        </label>
+
+        <div class="receipt-image-wrap">
+          <img id="receiptImg" alt="Receipt preview" />
+        </div>
+        <div class="field-row">
+          <button class="btn" id="downloadReceiptBtn">Download JPEG</button>
+          <button class="btn" id="copyReceiptBtn">Copy image</button>
+        </div>
+
+        <button class="btn btn-primary" id="sendReceiptBtn">Open WhatsApp chat</button>
+        <p class="hint">WhatsApp can't auto-attach an image from a link, so: download or copy the receipt above, tap "Open WhatsApp chat", then attach/paste the image and hit send.</p>
+      </div>
+    </section>
+
+    <!-- TENANTS -->
+    <section class="panel" id="panel-tenants">
+      <div class="section-head">
+        <h2>Tenants</h2>
+        <button class="btn btn-small" id="addTenantBtn">+ Add tenant</button>
+      </div>
+      <div id="tenantList" class="card-list"></div>
+      <p class="empty-note" id="tenantEmpty" hidden>No tenants yet. Add your first one above.</p>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="panel" id="panel-history">
+      <div class="section-head">
+        <h2>Receipt history</h2>
+        <span class="muted" id="historyCount"></span>
+      </div>
+      <div id="historyList" class="card-list"></div>
+      <p class="empty-note" id="historyEmpty" hidden>No receipts sent yet.</p>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="panel" id="panel-settings">
+      <div class="section-head"><h2>Settings</h2></div>
+
+      <div class="card">
+        <h3>Default owner name</h3>
+        <p class="hint">Used on the receipt letterhead for any tenant that doesn't have its own owner name set. If your properties belong to different owners, set the owner name per tenant instead (Tenants tab → edit tenant) — that always overrides this default.</p>
+        <label class="field">
+          <span>Default name / property name</span>
+          <input type="text" id="landlordName" placeholder="e.g. Lim Properties" />
+        </label>
+        <button class="btn" id="saveLandlordBtn">Save</button>
+      </div>
+
+      <div class="card">
+        <h3>Security</h3>
+        <p class="hint">A password screen keeps casual visitors from opening this page. Note: since this is a plain web page with no server, it's a deterrent, not bank-grade security — anyone with real technical skill and access to the device could bypass it. Don't store anything here you'd consider truly sensitive.</p>
+        <label class="field">
+          <span>Current password</span>
+          <input type="password" id="currentPassword" autocomplete="current-password" />
+        </label>
+        <label class="field">
+          <span>New password</span>
+          <input type="password" id="newPassword" autocomplete="new-password" />
+        </label>
+        <label class="field">
+          <span>Confirm new password</span>
+          <input type="password" id="confirmPassword" autocomplete="new-password" />
+        </label>
+        <button class="btn" id="changePasswordBtn">Change password</button>
+        <p class="hint" id="passwordStatus"></p>
+      </div>
+
+      <div class="card">
+        <h3>Google Sheet sync</h3>
+        <p class="hint">Paste the web app URL from your Google Apps Script (see README) to sync tenants and history to a spreadsheet. This is what lets the same data show up on your phone and your PC.</p>
+        <label class="field">
+          <span>Apps Script Web App URL</span>
+          <input type="url" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec" />
+        </label>
+        <div class="field-row">
+          <button class="btn" id="saveUrlBtn">Save</button>
+          <button class="btn" id="pushBtn">Push local → Sheet</button>
+          <button class="btn" id="pullBtn">Pull Sheet → local</button>
+        </div>
+        <p class="hint" id="syncStatus"></p>
+      </div>
+
+      <div class="card">
+        <h3>Reminder rule</h3>
+        <label class="field">
+          <span>Remind this many days before the due day</span>
+          <input type="number" id="reminderDays" min="0" max="15" value="3" />
+        </label>
+        <label class="field">
+          <span>Default country code (for new tenants)</span>
+          <input type="text" id="defaultCountryCode" placeholder="e.g. 60 for Malaysia" />
+        </label>
+        <button class="btn" id="saveSettingsBtn">Save settings</button>
+      </div>
+
+      <div class="card">
+        <h3>Data</h3>
+        <div class="field-row">
+          <button class="btn" id="exportBtn">Export backup (.json)</button>
+          <button class="btn btn-danger" id="wipeBtn">Erase all local data</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Tenant editor modal -->
+<div class="modal-backdrop" id="tenantModalBackdrop" hidden>
+  <div class="modal">
+    <h3 id="tenantModalTitle">Add tenant</h3>
+    <label class="field"><span>Name</span><input type="text" id="tName" placeholder="e.g. Aina binti Rahman" /></label>
+    <label class="field"><span>WhatsApp number (with country code, no +)</span><input type="text" id="tPhone" placeholder="e.g. 60123456789" /></label>
+    <div class="field-row">
+      <label class="field"><span>Monthly rent</span><input type="number" id="tRent" placeholder="0.00" /></label>
+      <label class="field"><span>Currency</span><input type="text" id="tCurrency" placeholder="RM" value="RM" /></label>
+    </div>
+    <label class="field"><span>Rent due day of month (1–31)</span><input type="number" id="tDueDay" min="1" max="31" placeholder="e.g. 5" /></label>
+    <label class="field"><span>Unit / address (optional)</span><input type="text" id="tUnit" placeholder="e.g. Unit 4B" /></label>
+    <label class="field"><span>Owner name on receipt for this property</span><input type="text" id="tOwnerName" placeholder="e.g. Ahmad bin Ismail" /></label>
+    <div class="field-row">
+      <button class="btn" id="cancelTenantBtn">Cancel</button>
+      <button class="btn btn-primary" id="saveTenantBtn">Save tenant</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

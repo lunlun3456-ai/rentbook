@@ -1,0 +1,563 @@
+/* ---------- storage helpers ---------- */
+const KEYS = { tenants: 'rb_tenants', receipts: 'rb_receipts', settings: 'rb_settings' };
+
+function load(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) { return fallback; }
+}
+function save(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+
+let tenants = load(KEYS.tenants, []);
+let receipts = load(KEYS.receipts, []);
+let settings = load(KEYS.settings, {
+  scriptUrl: '', reminderDays: 3, defaultCountryCode: '',
+  landlordName: '', receiptCounter: 0, pwHash: ''
+});
+
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+/* ---------- tab navigation ---------- */
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab');
+  if (!btn) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+  if (btn.dataset.tab === 'history') renderHistory();
+});
+
+/* ---------- due-date logic ---------- */
+// Returns { daysUntil, status } where status is 'ok' | 'soon' | 'late'
+function dueInfo(tenant) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dueDay = Math.min(Math.max(parseInt(tenant.dueDay || 1, 10), 1), 28);
+  let due = new Date(today.getFullYear(), today.getMonth(), dueDay);
+  // if this month's due date already passed by more than a couple days, still show as late for this cycle
+  // if it's more than 20 days in the past, roll to next month's date for "upcoming" framing
+  const diffDays = Math.round((due - today) / 86400000);
+  let effectiveDiff = diffDays;
+  if (diffDays < -20) {
+    const nextDue = new Date(today.getFullYear(), today.getMonth() + 1, dueDay);
+    effectiveDiff = Math.round((nextDue - today) / 86400000);
+    due = nextDue;
+  }
+  const reminderWindow = parseInt(settings.reminderDays, 10) || 3;
+  let status = 'ok';
+  if (effectiveDiff < 0) status = 'late';
+  else if (effectiveDiff <= reminderWindow) status = 'soon';
+  return { daysUntil: effectiveDiff, status, dueDate: due };
+}
+
+function statusLabel(info) {
+  if (info.status === 'late') return `${Math.abs(info.daysUntil)}d overdue`;
+  if (info.daysUntil === 0) return 'due today';
+  return `due in ${info.daysUntil}d`;
+}
+
+/* ---------- WhatsApp helpers ---------- */
+function openWhatsApp(phone, text) {
+  const cleanPhone = (phone || '').replace(/[^\d]/g, '');
+  const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank');
+}
+
+function fmtMoney(tenant, amount) {
+  const n = Number(amount || 0);
+  return `${tenant.currency || ''} ${n.toFixed(2)}`.trim();
+}
+function fmtDate(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  return dt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+// Draws a professional-looking receipt onto a canvas and returns it.
+function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
+  const W = 720, H = 900;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // paper background
+  ctx.fillStyle = '#fffdf8';
+  ctx.fillRect(0, 0, W, H);
+
+  // header band
+  ctx.fillStyle = '#1f4d43';
+  ctx.fillRect(0, 0, W, 130);
+  ctx.fillStyle = '#f6f1e6';
+  ctx.font = '700 26px Georgia, "Times New Roman", serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(tenant.ownerName || settings.landlordName || 'Rent Receipt', 40, 58);
+  ctx.font = '13px Arial, sans-serif';
+  ctx.fillStyle = '#cfe3dc';
+  ctx.fillText('OFFICIAL RENT RECEIPT', 40, 84);
+
+  ctx.textAlign = 'right';
+  ctx.font = '13px Arial, sans-serif';
+  ctx.fillStyle = '#f6f1e6';
+  ctx.fillText(`Receipt No. ${receiptNo}`, W - 40, 58);
+  ctx.fillText(fmtDate(new Date()), W - 40, 78);
+  ctx.textAlign = 'left';
+
+  // body rows
+  let y = 190;
+  function row(label, value, big) {
+    ctx.fillStyle = '#6b6455';
+    ctx.font = '12px Arial, sans-serif';
+    ctx.fillText(label.toUpperCase(), 40, y);
+    ctx.fillStyle = '#26221b';
+    ctx.font = big ? '700 30px Georgia, "Times New Roman", serif' : '600 18px Arial, sans-serif';
+    ctx.fillText(String(value), 40, y + (big ? 34 : 24));
+    y += big ? 70 : 54;
+  }
+
+  row('Tenant', tenant.name);
+  if (tenant.unit) row('Unit / address', tenant.unit);
+  row('Amount received', fmtMoney(tenant, amount), true);
+  row('Date paid', fmtDate(dateStr));
+  if (period) row('For period', period);
+  if (note) row('Note', note);
+
+  // dashed divider
+  ctx.strokeStyle = '#d8cdb4';
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath(); ctx.moveTo(40, y + 6); ctx.lineTo(W - 40, y + 6); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#6b6455';
+  ctx.font = 'italic 15px Georgia, "Times New Roman", serif';
+  ctx.fillText('Thank you for your payment.', 40, y + 40);
+
+  // signature line, pinned near the bottom
+  const sigY = H - 90;
+  ctx.strokeStyle = '#26221b';
+  ctx.beginPath(); ctx.moveTo(40, sigY); ctx.lineTo(300, sigY); ctx.stroke();
+  ctx.font = '12px Arial, sans-serif';
+  ctx.fillStyle = '#6b6455';
+  ctx.fillText('Landlord / agent signature', 40, sigY + 18);
+
+  return canvas;
+}
+
+function buildReminderText(tenant, info) {
+  const when = info.status === 'late'
+    ? `is now ${Math.abs(info.daysUntil)} day(s) overdue`
+    : (info.daysUntil === 0 ? `is due today` : `is due in ${info.daysUntil} day(s)`);
+  return [
+    `Hi ${tenant.name}, this is a friendly reminder that your rent of ${fmtMoney(tenant, tenant.rent)} ${when} (${fmtDate(info.dueDate)}).`,
+    `Please let me know once it's paid so I can send your receipt. Thank you!`
+  ].join('\n\n');
+}
+
+/* ---------- rendering: home / reminders ---------- */
+function renderHome() {
+  const list = document.getElementById('reminderList');
+  const emptyNote = document.getElementById('reminderEmpty');
+  list.innerHTML = '';
+
+  const due = tenants
+    .map(t => ({ t, info: dueInfo(t) }))
+    .filter(x => x.info.status !== 'ok')
+    .sort((a, b) => a.info.daysUntil - b.info.daysUntil);
+
+  document.getElementById('reminderCount').textContent = due.length ? `${due.length} to follow up` : '';
+  emptyNote.hidden = due.length > 0;
+
+  due.forEach(({ t, info }) => {
+    const el = document.createElement('div');
+    el.className = 'card-item';
+    el.innerHTML = `
+      <div class="row-top">
+        <span class="name">${escapeHtml(t.name)}</span>
+        <span class="status-chip status-${info.status === 'late' ? 'late' : 'soon'}">${statusLabel(info)}</span>
+      </div>
+      <div class="sub">${fmtMoney(t, t.rent)} · due ${fmtDate(info.dueDate)}</div>
+      <div class="card-actions">
+        <button class="btn btn-small" data-action="remind" data-id="${t.id}">Send reminder via WhatsApp</button>
+      </div>`;
+    list.appendChild(el);
+  });
+
+  // populate receipt tenant select
+  const sel = document.getElementById('receiptTenant');
+  const prevVal = sel.value;
+  sel.innerHTML = tenants.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+  if (prevVal) sel.value = prevVal;
+  updateReceiptPreview();
+}
+
+document.getElementById('reminderList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action="remind"]');
+  if (!btn) return;
+  const t = tenants.find(x => x.id === btn.dataset.id);
+  if (!t) return;
+  openWhatsApp(t.phone, buildReminderText(t, dueInfo(t)));
+});
+
+/* ---------- receipt form ---------- */
+const receiptFields = ['receiptTenant', 'receiptAmount', 'receiptDate', 'receiptPeriod', 'receiptNote'];
+receiptFields.forEach(id => document.getElementById(id).addEventListener('input', updateReceiptPreview));
+
+function currentReceiptTenant() {
+  const id = document.getElementById('receiptTenant').value;
+  return tenants.find(t => t.id === id);
+}
+
+let lastReceiptDataUrl = null;
+
+function updateReceiptPreview() {
+  const t = currentReceiptTenant();
+  const img = document.getElementById('receiptImg');
+  if (!t) { img.removeAttribute('src'); lastReceiptDataUrl = null; return; }
+  const amount = document.getElementById('receiptAmount').value || t.rent;
+  const date = document.getElementById('receiptDate').value || todayISO();
+  const period = document.getElementById('receiptPeriod').value;
+  const note = document.getElementById('receiptNote').value;
+  const nextNo = String((settings.receiptCounter || 0) + 1).padStart(4, '0');
+  const canvas = drawReceiptCanvas(t, amount, date, period, note, nextNo);
+  lastReceiptDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  img.src = lastReceiptDataUrl;
+}
+
+function todayISO() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+document.getElementById('receiptDate').value = todayISO();
+
+function recordReceiptAndAdvanceCounter(t, amount, date, period, note) {
+  receipts.unshift({
+    id: uid(), tenantId: t.id, tenantName: t.name, amount: Number(amount) || 0,
+    date, period, note, sentAt: new Date().toISOString()
+  });
+  save(KEYS.receipts, receipts);
+  settings.receiptCounter = (settings.receiptCounter || 0) + 1;
+  save(KEYS.settings, settings);
+  renderHistory();
+}
+
+document.getElementById('sendReceiptBtn').addEventListener('click', () => {
+  const t = currentReceiptTenant();
+  if (!t) { alert('Add a tenant first.'); return; }
+  if (!lastReceiptDataUrl) { alert('Generate the receipt image first.'); return; }
+  const amount = document.getElementById('receiptAmount').value || t.rent;
+  const date = document.getElementById('receiptDate').value || todayISO();
+  const period = document.getElementById('receiptPeriod').value;
+  const note = document.getElementById('receiptNote').value;
+
+  recordReceiptAndAdvanceCounter(t, amount, date, period, note);
+
+  const text = `Hi ${t.name}, here's your rent receipt for ${fmtMoney(t, amount)} (${fmtDate(date)}). Attaching the receipt image now.`;
+  openWhatsApp(t.phone, text);
+  updateReceiptPreview();
+});
+
+document.getElementById('downloadReceiptBtn').addEventListener('click', () => {
+  if (!lastReceiptDataUrl) { alert('Pick a tenant first.'); return; }
+  const t = currentReceiptTenant();
+  const a = document.createElement('a');
+  a.href = lastReceiptDataUrl;
+  a.download = `receipt-${(t && t.name || 'tenant').replace(/\s+/g, '_')}-${todayISO()}.jpg`;
+  a.click();
+});
+
+document.getElementById('copyReceiptBtn').addEventListener('click', async () => {
+  if (!lastReceiptDataUrl) { alert('Pick a tenant first.'); return; }
+  try {
+    const res = await fetch(lastReceiptDataUrl);
+    const blob = await res.blob();
+    await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+    alert('Receipt image copied — paste it (Ctrl/Cmd+V) straight into WhatsApp Web.');
+  } catch (err) {
+    alert("Couldn't copy the image on this browser. Use Download instead and attach it manually.");
+  }
+});
+
+/* ---------- tenants ---------- */
+function renderTenants() {
+  const list = document.getElementById('tenantList');
+  const emptyNote = document.getElementById('tenantEmpty');
+  list.innerHTML = '';
+  emptyNote.hidden = tenants.length > 0;
+
+  tenants.forEach(t => {
+    const info = dueInfo(t);
+    const el = document.createElement('div');
+    el.className = 'card-item';
+    el.innerHTML = `
+      <div class="row-top">
+        <span class="name">${escapeHtml(t.name)}</span>
+        <span class="status-chip status-${info.status === 'ok' ? 'ok' : (info.status === 'late' ? 'late' : 'soon')}">${statusLabel(info)}</span>
+      </div>
+      <div class="sub">${fmtMoney(t, t.rent)} / month · due day ${t.dueDay}${t.unit ? ' · ' + escapeHtml(t.unit) : ''}</div>
+      <div class="sub">Owner on receipt: ${escapeHtml(t.ownerName || settings.landlordName || '—')}</div>
+      <div class="sub">WhatsApp: +${escapeHtml(t.phone)}</div>
+      <div class="card-actions">
+        <button class="btn btn-small" data-action="edit" data-id="${t.id}">Edit</button>
+        <button class="btn btn-small btn-danger" data-action="delete" data-id="${t.id}">Delete</button>
+      </div>`;
+    list.appendChild(el);
+  });
+}
+
+document.getElementById('tenantList').addEventListener('click', (e) => {
+  const editBtn = e.target.closest('button[data-action="edit"]');
+  const delBtn = e.target.closest('button[data-action="delete"]');
+  if (editBtn) openTenantModal(tenants.find(t => t.id === editBtn.dataset.id));
+  if (delBtn) {
+    if (confirm('Delete this tenant? This will not delete their past receipt history.')) {
+      tenants = tenants.filter(t => t.id !== delBtn.dataset.id);
+      save(KEYS.tenants, tenants);
+      renderTenants(); renderHome();
+    }
+  }
+});
+
+document.getElementById('addTenantBtn').addEventListener('click', () => openTenantModal(null));
+
+let editingTenantId = null;
+function openTenantModal(tenant) {
+  editingTenantId = tenant ? tenant.id : null;
+  document.getElementById('tenantModalTitle').textContent = tenant ? 'Edit tenant' : 'Add tenant';
+  document.getElementById('tName').value = tenant ? tenant.name : '';
+  document.getElementById('tPhone').value = tenant ? tenant.phone : (settings.defaultCountryCode || '');
+  document.getElementById('tRent').value = tenant ? tenant.rent : '';
+  document.getElementById('tCurrency').value = tenant ? tenant.currency : 'RM';
+  document.getElementById('tDueDay').value = tenant ? tenant.dueDay : '';
+  document.getElementById('tUnit').value = tenant ? (tenant.unit || '') : '';
+  document.getElementById('tOwnerName').value = tenant ? (tenant.ownerName || '') : (settings.landlordName || '');
+  document.getElementById('tenantModalBackdrop').hidden = false;
+}
+document.getElementById('cancelTenantBtn').addEventListener('click', () => {
+  document.getElementById('tenantModalBackdrop').hidden = true;
+});
+document.getElementById('saveTenantBtn').addEventListener('click', () => {
+  const name = document.getElementById('tName').value.trim();
+  const phone = document.getElementById('tPhone').value.trim();
+  const rent = parseFloat(document.getElementById('tRent').value) || 0;
+  const currency = document.getElementById('tCurrency').value.trim() || 'RM';
+  const dueDay = parseInt(document.getElementById('tDueDay').value, 10) || 1;
+  const unit = document.getElementById('tUnit').value.trim();
+  const ownerName = document.getElementById('tOwnerName').value.trim();
+
+  if (!name || !phone) { alert('Name and WhatsApp number are required.'); return; }
+
+  if (editingTenantId) {
+    const t = tenants.find(x => x.id === editingTenantId);
+    Object.assign(t, { name, phone, rent, currency, dueDay, unit, ownerName });
+  } else {
+    tenants.push({ id: uid(), name, phone, rent, currency, dueDay, unit, ownerName });
+  }
+  save(KEYS.tenants, tenants);
+  document.getElementById('tenantModalBackdrop').hidden = true;
+  renderTenants(); renderHome();
+});
+
+/* ---------- history ---------- */
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  const emptyNote = document.getElementById('historyEmpty');
+  list.innerHTML = '';
+  emptyNote.hidden = receipts.length > 0;
+  document.getElementById('historyCount').textContent = receipts.length ? `${receipts.length} sent` : '';
+
+  receipts.forEach(r => {
+    const el = document.createElement('div');
+    el.className = 'card-item';
+    el.innerHTML = `
+      <div class="row-top">
+        <span class="name">${escapeHtml(r.tenantName)}</span>
+        <span class="amount">${escapeHtml(String(r.amount))}</span>
+      </div>
+      <div class="sub">Paid ${fmtDate(r.date)}${r.period ? ' · ' + escapeHtml(r.period) : ''}</div>
+      ${r.note ? `<div class="sub">${escapeHtml(r.note)}</div>` : ''}`;
+    list.appendChild(el);
+  });
+}
+
+/* ---------- settings ---------- */
+document.getElementById('scriptUrl').value = settings.scriptUrl || '';
+document.getElementById('reminderDays').value = settings.reminderDays || 3;
+document.getElementById('defaultCountryCode').value = settings.defaultCountryCode || '';
+document.getElementById('landlordName').value = settings.landlordName || '';
+
+document.getElementById('saveLandlordBtn').addEventListener('click', () => {
+  settings.landlordName = document.getElementById('landlordName').value.trim();
+  save(KEYS.settings, settings);
+  updateReceiptPreview();
+  alert('Saved.');
+});
+
+document.getElementById('changePasswordBtn').addEventListener('click', async () => {
+  const status = document.getElementById('passwordStatus');
+  const current = document.getElementById('currentPassword').value;
+  const next = document.getElementById('newPassword').value;
+  const confirm = document.getElementById('confirmPassword').value;
+
+  if (settings.pwHash) {
+    const currentHash = await sha256(current);
+    if (currentHash !== settings.pwHash) { status.textContent = 'Current password is incorrect.'; return; }
+  }
+  if (!next || next.length < 4) { status.textContent = 'New password must be at least 4 characters.'; return; }
+  if (next !== confirm) { status.textContent = "New password and confirmation don't match."; return; }
+
+  settings.pwHash = await sha256(next);
+  save(KEYS.settings, settings);
+  document.getElementById('currentPassword').value = '';
+  document.getElementById('newPassword').value = '';
+  document.getElementById('confirmPassword').value = '';
+  status.textContent = 'Password updated.';
+});
+
+document.getElementById('saveUrlBtn').addEventListener('click', () => {
+  settings.scriptUrl = document.getElementById('scriptUrl').value.trim();
+  save(KEYS.settings, settings);
+  updateSyncPill();
+  document.getElementById('syncStatus').textContent = 'Saved.';
+});
+document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+  settings.reminderDays = parseInt(document.getElementById('reminderDays').value, 10) || 3;
+  settings.defaultCountryCode = document.getElementById('defaultCountryCode').value.trim();
+  save(KEYS.settings, settings);
+  renderHome(); renderTenants();
+  alert('Settings saved.');
+});
+
+function updateSyncPill() {
+  const pill = document.getElementById('syncPill');
+  const label = document.getElementById('syncLabel');
+  if (settings.scriptUrl) { pill.classList.add('on'); label.textContent = 'Sheet connected'; }
+  else { pill.classList.remove('on'); label.textContent = 'Local only'; }
+}
+
+document.getElementById('pushBtn').addEventListener('click', async () => {
+  const status = document.getElementById('syncStatus');
+  if (!settings.scriptUrl) { status.textContent = 'Add and save your Apps Script URL first.'; return; }
+  status.textContent = 'Pushing...';
+  try {
+    await fetch(settings.scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ tenants, receipts })
+    });
+    status.textContent = 'Pushed local data to the sheet.';
+  } catch (err) {
+    status.textContent = 'Could not reach the sheet. Check the URL and that the script is deployed for "Anyone".';
+  }
+});
+
+document.getElementById('pullBtn').addEventListener('click', async () => {
+  const status = document.getElementById('syncStatus');
+  if (!settings.scriptUrl) { status.textContent = 'Add and save your Apps Script URL first.'; return; }
+  status.textContent = 'Pulling...';
+  try {
+    const res = await fetch(settings.scriptUrl, { method: 'GET' });
+    const data = await res.json();
+    if (data.tenants) { tenants = data.tenants; save(KEYS.tenants, tenants); }
+    if (data.receipts) { receipts = data.receipts; save(KEYS.receipts, receipts); }
+    renderTenants(); renderHome(); renderHistory();
+    status.textContent = 'Pulled the latest data from the sheet.';
+  } catch (err) {
+    status.textContent = 'Could not reach the sheet. Check the URL.';
+  }
+});
+
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ tenants, receipts, settings }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `rent-book-backup-${todayISO()}.json`;
+  a.click();
+});
+
+document.getElementById('wipeBtn').addEventListener('click', () => {
+  if (confirm('This erases all tenants and receipt history stored on this device. Continue?')) {
+    tenants = []; receipts = [];
+    save(KEYS.tenants, tenants); save(KEYS.receipts, receipts);
+    renderTenants(); renderHome(); renderHistory();
+  }
+});
+
+/* ---------- utils ---------- */
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ---------- lock screen ---------- */
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function initApp() {
+  updateSyncPill();
+  renderTenants();
+  renderHome();
+  renderHistory();
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+}
+
+function unlockApp() {
+  document.getElementById('lockScreen').hidden = true;
+  document.getElementById('appRoot').classList.add('unlocked');
+  initApp();
+}
+
+function setupLockScreen() {
+  const title = document.getElementById('lockTitle');
+  const hint = document.getElementById('lockHint');
+  const pwField = document.getElementById('lockPassword');
+  const confirmField = document.getElementById('lockPasswordConfirm');
+  const errorEl = document.getElementById('lockError');
+  const submitBtn = document.getElementById('lockSubmitBtn');
+  const isSetup = !settings.pwHash;
+
+  if (isSetup) {
+    title.textContent = 'Set a password';
+    hint.textContent = 'Choose a password to protect this page on this device. Keep this app open next time or you may need to enter it again.';
+    confirmField.hidden = false;
+    submitBtn.textContent = 'Set password';
+  } else {
+    title.textContent = 'Enter password';
+    hint.textContent = 'This device is protected. Enter your password to continue.';
+    confirmField.hidden = true;
+    submitBtn.textContent = 'Unlock';
+  }
+  errorEl.hidden = true;
+  pwField.value = ''; confirmField.value = '';
+
+  async function attempt() {
+    errorEl.hidden = true;
+    if (isSetup) {
+      const p1 = pwField.value, p2 = confirmField.value;
+      if (!p1 || p1.length < 4) { errorEl.textContent = 'Password must be at least 4 characters.'; errorEl.hidden = false; return; }
+      if (p1 !== p2) { errorEl.textContent = "Passwords don't match."; errorEl.hidden = false; return; }
+      settings.pwHash = await sha256(p1);
+      save(KEYS.settings, settings);
+      unlockApp();
+    } else {
+      const hash = await sha256(pwField.value);
+      if (hash === settings.pwHash) {
+        unlockApp();
+      } else {
+        errorEl.textContent = 'Incorrect password.'; errorEl.hidden = false;
+        pwField.value = '';
+      }
+    }
+  }
+
+  submitBtn.onclick = attempt;
+  [pwField, confirmField].forEach(f => f.addEventListener('keydown', (e) => { if (e.key === 'Enter') attempt(); }));
+  pwField.focus();
+}
+
+setupLockScreen();
