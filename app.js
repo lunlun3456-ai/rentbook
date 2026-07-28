@@ -307,25 +307,33 @@ function renderHome() {
   emptyNote.hidden = due.length > 0;
 
   due.forEach(({ t, info }) => {
-    const el = document.createElement('div');
-    el.className = 'card-item';
-    el.innerHTML = `
-      <div class="row-top">
-        <span class="name">${escapeHtml(t.name)}</span>
-        <span class="status-chip status-${info.status === 'late' ? 'late' : 'soon'}">${statusLabel(info)}</span>
-      </div>
-      <div class="sub">${fmtMoney(t, t.rent)} · due ${fmtDate(info.dueDate)}</div>
-      <div class="card-actions">
-        <a class="btn btn-small" href="${waHref(t.phone, buildReminderText(t, info))}" target="_blank" rel="noopener">Send reminder via WhatsApp</a>
-      </div>`;
-    list.appendChild(el);
+    try {
+      const el = document.createElement('div');
+      el.className = 'card-item';
+      el.innerHTML = `
+        <div class="row-top">
+          <span class="name">${escapeHtml(t.name)}</span>
+          <span class="status-chip status-${info.status === 'late' ? 'late' : 'soon'}">${statusLabel(info)}</span>
+        </div>
+        <div class="sub">${fmtMoney(t, t.rent)} · due ${fmtDate(info.dueDate)}</div>
+        <div class="card-actions">
+          <a class="btn btn-small" href="${waHref(t.phone, buildReminderText(t, info))}" target="_blank" rel="noopener">Send reminder via WhatsApp</a>
+        </div>`;
+      list.appendChild(el);
+    } catch (err) {
+      console.error('Could not render reminder card for tenant:', t, err);
+    }
   });
 
-  const sel = document.getElementById('receiptTenant');
-  const prevVal = sel.value;
-  sel.innerHTML = tenants.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
-  if (prevVal) sel.value = prevVal;
-  updateReceiptPreview();
+  try {
+    const sel = document.getElementById('receiptTenant');
+    const prevVal = sel.value;
+    sel.innerHTML = tenants.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+    if (prevVal) sel.value = prevVal;
+    updateReceiptPreview();
+  } catch (err) {
+    console.error('Could not populate the receipt tenant selector:', err);
+  }
 }
 
 const receiptFields = ['receiptAmount', 'receiptDate', 'receiptPeriod', 'receiptNote'];
@@ -440,6 +448,7 @@ function renderTenants() {
   emptyNote.hidden = tenants.length > 0;
 
   tenants.forEach(t => {
+   try {
     const info = dueInfo(t);
     const el = document.createElement('div');
     el.className = 'card-item';
@@ -467,6 +476,9 @@ function renderTenants() {
         <button class="btn btn-small btn-danger" data-action="delete" data-id="${t.id}">Delete</button>
       </div>`;
     list.appendChild(el);
+   } catch (err) {
+    console.error('Could not render tenant card:', t, err);
+   }
   });
 }
 
@@ -756,9 +768,9 @@ async function sha256(str) {
 function initApp() {
   fillSettingsForm();
   setSyncLabel('Synced with sheet', true);
-  renderTenants();
-  renderHome();
-  renderHistory();
+  try { renderTenants(); } catch (err) { console.error('renderTenants failed:', err); }
+  try { renderHome(); } catch (err) { console.error('renderHome failed:', err); }
+  try { renderHistory(); } catch (err) { console.error('renderHistory failed:', err); }
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
