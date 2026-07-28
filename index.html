@@ -66,9 +66,10 @@
           <span>Tenant</span>
           <select id="receiptTenant"></select>
         </label>
+        <div class="countdown-box" id="receiptCountdown"></div>
         <div class="field-row">
           <label class="field">
-            <span>Amount</span>
+            <span>Amount (auto-filled from rent — edit if different)</span>
             <input type="number" id="receiptAmount" inputmode="decimal" placeholder="0.00" />
           </label>
           <label class="field">
@@ -77,8 +78,8 @@
           </label>
         </div>
         <label class="field">
-          <span>For period (optional)</span>
-          <input type="text" id="receiptPeriod" placeholder="e.g. August 2026" />
+          <span>For period</span>
+          <input type="month" id="receiptPeriod" />
         </label>
         <label class="field">
           <span>Note (optional)</span>
@@ -111,6 +112,11 @@
     <!-- HISTORY -->
     <section class="panel" id="panel-history">
       <div class="section-head">
+        <h2>Summary</h2>
+      </div>
+      <div class="card summary-card" id="summaryCard"></div>
+
+      <div class="section-head" style="margin-top:22px">
         <h2>Receipt history</h2>
         <span class="muted" id="historyCount"></span>
       </div>
@@ -153,14 +159,14 @@
 
       <div class="card">
         <h3>Google Sheet sync</h3>
-        <p class="hint">Paste the web app URL from your Google Apps Script (see README) to sync tenants and history to a spreadsheet. This is what lets the same data show up on your phone and your PC.</p>
+        <p class="hint">Paste the web app URL from your Google Apps Script (see README). Once saved, every add/edit/receipt syncs to the sheet automatically — no need to tap Push. Use the buttons below only to force a sync or to pull a fresh copy onto a new device.</p>
         <label class="field">
           <span>Apps Script Web App URL</span>
           <input type="url" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec" />
         </label>
         <div class="field-row">
           <button class="btn" id="saveUrlBtn">Save</button>
-          <button class="btn" id="pushBtn">Push local → Sheet</button>
+          <button class="btn" id="pushBtn">Force push</button>
           <button class="btn" id="pullBtn">Pull Sheet → local</button>
         </div>
         <p class="hint" id="syncStatus"></p>
@@ -196,14 +202,20 @@
   <div class="modal">
     <h3 id="tenantModalTitle">Add tenant</h3>
     <label class="field"><span>Name</span><input type="text" id="tName" placeholder="e.g. Aina binti Rahman" /></label>
+    <label class="field"><span>Nickname for this property (optional)</span><input type="text" id="tNickname" placeholder="e.g. Vyne Unit 2" /></label>
     <label class="field"><span>WhatsApp number (with country code, no +)</span><input type="text" id="tPhone" placeholder="e.g. 60123456789" /></label>
     <div class="field-row">
       <label class="field"><span>Monthly rent</span><input type="number" id="tRent" placeholder="0.00" /></label>
       <label class="field"><span>Currency</span><input type="text" id="tCurrency" placeholder="RM" value="RM" /></label>
     </div>
     <label class="field"><span>Rent due day of month (1–31)</span><input type="number" id="tDueDay" min="1" max="31" placeholder="e.g. 5" /></label>
-    <label class="field"><span>Unit / address (optional)</span><input type="text" id="tUnit" placeholder="e.g. Unit 4B" /></label>
+    <label class="field"><span>Unit / address (optional)</span><textarea id="tUnit" rows="2" placeholder="e.g. C-19-07, The Vyne, Jalan 1/108D, Taman Sungai Besi, 57100 KL"></textarea></label>
     <label class="field"><span>Owner name on receipt for this property</span><input type="text" id="tOwnerName" placeholder="e.g. Ahmad bin Ismail" /></label>
+    <div class="field-row">
+      <label class="field"><span>Lease start (commencing)</span><input type="date" id="tLeaseStart" /></label>
+      <label class="field"><span>Lease end (terminating)</span><input type="date" id="tLeaseEnd" /></label>
+    </div>
+    <label class="field"><span>Renewal period (years)</span><input type="number" id="tRenewalYears" min="0" step="0.5" placeholder="e.g. 1" /></label>
     <div class="field-row">
       <button class="btn" id="cancelTenantBtn">Cancel</button>
       <button class="btn btn-primary" id="saveTenantBtn">Save tenant</button>
