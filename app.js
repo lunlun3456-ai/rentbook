@@ -1,22 +1,67 @@
-/* ---------- storage helpers ---------- */
-const KEYS = { tenants: 'rb_tenants', receipts: 'rb_receipts', settings: 'rb_settings' };
+/* ---------- storage: everything lives in the Google Sheet ----------
+   The ONLY thing kept on this device is the Apps Script URL itself —
+   the app needs to know which sheet to talk to before it can load
+   anything from it. Tenants, receipts, and settings are never written
+   to localStorage; they live in memory only, mirrored to the sheet. */
+let scriptUrl = localStorage.getItem('rb_script_url') || '';
 
-function load(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (e) { return fallback; }
-}
-function save(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
-
-let tenants = load(KEYS.tenants, []);
-let receipts = load(KEYS.receipts, []);
-let settings = load(KEYS.settings, {
-  scriptUrl: '', reminderDays: 3, defaultCountryCode: '',
-  landlordName: '', receiptCounter: 0, pwHash: ''
-});
+let tenants = [];
+let receipts = [];
+let settings = { reminderDays: 3, defaultCountryCode: '', landlordName: '', receiptCounter: 0, pwHash: '' };
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+function normalizeSettings(raw) {
+  raw = raw || {};
+  return {
+    reminderDays: parseInt(raw.reminderDays, 10) || 3,
+    defaultCountryCode: raw.defaultCountryCode || '',
+    landlordName: raw.landlordName || '',
+    receiptCounter: parseInt(raw.receiptCounter, 10) || 0,
+    pwHash: raw.pwHash || ''
+  };
+}
+
+async function fetchAllFromSheet() {
+  const res = await fetch(scriptUrl, { method: 'GET' });
+  if (!res.ok) throw new Error('bad response');
+  const data = await res.json();
+  tenants = data.tenants || [];
+  receipts = data.receipts || [];
+  settings = normalizeSettings(data.settings || {});
+}
+
+async function pushAllToSheet() {
+  const res = await fetch(scriptUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ tenants, receipts, settings })
+  });
+  if (!res.ok) throw new Error('bad response');
+}
+
+function setSyncLabel(text, ok) {
+  const pill = document.getElementById('syncPill');
+  const label = document.getElementById('syncLabel');
+  if (label) label.textContent = text;
+  if (pill) pill.classList.toggle('on', !!ok);
+}
+
+// Saves the current in-memory state back to the sheet. Since nothing is
+// stored locally, a failed save means the change only exists until the
+// tab is closed — so this surfaces failures clearly rather than failing silently.
+async function persist() {
+  setSyncLabel('Saving…', false);
+  try {
+    await pushAllToSheet();
+    setSyncLabel('Synced with sheet', true);
+    return true;
+  } catch (err) {
+    setSyncLabel('Save failed — check connection', false);
+    alert('Could not save to your Google Sheet. Check your internet connection and try again — nothing is stored on this device, so please stay on this page until it shows "Synced with sheet".');
+    return false;
+  }
+}
 
 /* ---------- tab navigation ---------- */
 document.getElementById('tabs').addEventListener('click', (e) => {
@@ -31,14 +76,11 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 });
 
 /* ---------- due-date logic ---------- */
-// Returns { daysUntil, status } where status is 'ok' | 'soon' | 'late'
 function dueInfo(tenant) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const dueDay = Math.min(Math.max(parseInt(tenant.dueDay || 1, 10), 1), 28);
   let due = new Date(today.getFullYear(), today.getMonth(), dueDay);
-  // if this month's due date already passed by more than a couple days, still show as late for this cycle
-  // if it's more than 20 days in the past, roll to next month's date for "upcoming" framing
   const diffDays = Math.round((due - today) / 86400000);
   let effectiveDiff = diffDays;
   if (diffDays < -20) {
@@ -59,7 +101,6 @@ function statusLabel(info) {
   return `due in ${info.daysUntil}d`;
 }
 
-// Compares a tenant's most recent receipt date against that month's due day.
 function lastPaymentStatus(tenant) {
   const tReceipts = receipts.filter(r => r.tenantId === tenant.id).sort((a, b) => new Date(b.date) - new Date(a.date));
   if (!tReceipts.length) return null;
@@ -100,14 +141,12 @@ function fmtDate(d) {
   const dt = (d instanceof Date) ? d : new Date(d);
   return dt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 }
-// "2026-08" -> "August 2026"
 function fmtPeriod(yyyyMm) {
   if (!yyyyMm) return '';
   const [y, m] = yyyyMm.split('-').map(Number);
   if (!y || !m) return yyyyMm;
   return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
-// wraps text to fit maxWidth, returns up to maxLines lines (last line gets an ellipsis if truncated)
 function wrapText(ctx, text, maxWidth, maxLines) {
   const words = String(text).split(/\s+/);
   const lines = [];
@@ -133,8 +172,6 @@ function wrapText(ctx, text, maxWidth, maxLines) {
   return lines;
 }
 
-// For a given payment: how many days late it was (0 or negative = on time/early),
-// and when the next payment is due after this one.
 function receiptDueCalc(tenant, dateStr, period) {
   const dueDay = Math.min(Math.max(parseInt(tenant.dueDay || 1, 10), 1), 28);
   const paidDate = new Date(dateStr);
@@ -150,18 +187,15 @@ function receiptDueCalc(tenant, dateStr, period) {
   return { lateDays, nextDue };
 }
 
-// Draws a professional-looking receipt onto a canvas and returns it.
 function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   const W = 720, H = 1060;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
 
-  // paper background
   ctx.fillStyle = '#fffdf8';
   ctx.fillRect(0, 0, W, H);
 
-  // header band
   ctx.fillStyle = '#1f4d43';
   ctx.fillRect(0, 0, W, 130);
   ctx.fillStyle = '#f6f1e6';
@@ -179,7 +213,6 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   ctx.fillText(fmtDate(new Date()), W - 40, 78);
   ctx.textAlign = 'left';
 
-  // body rows
   let y = 190;
   function label(text) {
     ctx.fillStyle = '#6b6455';
@@ -221,7 +254,6 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   }
   row('Next payment due', fmtDate(nextDue));
 
-  // dashed divider
   ctx.strokeStyle = '#d8cdb4';
   ctx.setLineDash([6, 6]);
   ctx.beginPath(); ctx.moveTo(40, y + 6); ctx.lineTo(W - 40, y + 6); ctx.stroke();
@@ -231,13 +263,11 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   ctx.font = 'italic 15px Georgia, "Times New Roman", serif';
   ctx.fillText('Thank you for your payment.', 40, y + 40);
 
-  // utility-bill notice
   ctx.font = '12px Arial, sans-serif';
   ctx.fillStyle = '#6b6455';
   const noticeLines = wrapText(ctx, 'Tenants must pay utility bills on time to avoid service disruptions, late fees, and legal penalties.', W - 80, 3);
   noticeLines.forEach((ln, i) => ctx.fillText(ln, 40, y + 70 + i * 18));
 
-  // computer-generated note, pinned near the bottom (no signature required)
   const noteY = H - 60;
   ctx.font = '12px Arial, sans-serif';
   ctx.fillStyle = '#8a8271';
@@ -256,7 +286,6 @@ function buildReminderText(tenant, info) {
   ].join('\n\n');
 }
 
-/* ---------- rendering: home / reminders ---------- */
 function renderHome() {
   const list = document.getElementById('reminderList');
   const emptyNote = document.getElementById('reminderEmpty');
@@ -285,7 +314,6 @@ function renderHome() {
     list.appendChild(el);
   });
 
-  // populate receipt tenant select
   const sel = document.getElementById('receiptTenant');
   const prevVal = sel.value;
   sel.innerHTML = tenants.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
@@ -301,7 +329,6 @@ document.getElementById('reminderList').addEventListener('click', (e) => {
   openWhatsApp(t.phone, buildReminderText(t, dueInfo(t)));
 });
 
-/* ---------- receipt form ---------- */
 const receiptFields = ['receiptAmount', 'receiptDate', 'receiptPeriod', 'receiptNote'];
 receiptFields.forEach(id => document.getElementById(id).addEventListener('input', updateReceiptPreview));
 
@@ -354,19 +381,17 @@ function todayISO() {
 }
 document.getElementById('receiptDate').value = todayISO();
 
-function recordReceiptAndAdvanceCounter(t, amount, date, period, note) {
+async function recordReceiptAndAdvanceCounter(t, amount, date, period, note) {
   receipts.unshift({
     id: uid(), tenantId: t.id, tenantName: t.name, amount: Number(amount) || 0,
     date, period, note, sentAt: new Date().toISOString()
   });
-  save(KEYS.receipts, receipts);
   settings.receiptCounter = (settings.receiptCounter || 0) + 1;
-  save(KEYS.settings, settings);
-  autoSyncPush();
+  await persist();
   renderHistory();
 }
 
-document.getElementById('sendReceiptBtn').addEventListener('click', () => {
+document.getElementById('sendReceiptBtn').addEventListener('click', async () => {
   const t = currentReceiptTenant();
   if (!t) { alert('Add a tenant first.'); return; }
   if (!lastReceiptDataUrl) { alert('Generate the receipt image first.'); return; }
@@ -375,7 +400,7 @@ document.getElementById('sendReceiptBtn').addEventListener('click', () => {
   const period = document.getElementById('receiptPeriod').value;
   const note = document.getElementById('receiptNote').value;
 
-  recordReceiptAndAdvanceCounter(t, amount, date, period, note);
+  await recordReceiptAndAdvanceCounter(t, amount, date, period, note);
 
   const text = `Hi ${t.name}, here's your rent receipt for ${fmtMoney(t, amount)} (${fmtDate(date)}). Attaching the receipt image now.`;
   openWhatsApp(t.phone, text);
@@ -403,7 +428,6 @@ document.getElementById('copyReceiptBtn').addEventListener('click', async () => 
   }
 });
 
-/* ---------- tenants ---------- */
 function renderTenants() {
   const list = document.getElementById('tenantList');
   const emptyNote = document.getElementById('tenantEmpty');
@@ -441,15 +465,14 @@ function renderTenants() {
   });
 }
 
-document.getElementById('tenantList').addEventListener('click', (e) => {
+document.getElementById('tenantList').addEventListener('click', async (e) => {
   const editBtn = e.target.closest('button[data-action="edit"]');
   const delBtn = e.target.closest('button[data-action="delete"]');
   if (editBtn) openTenantModal(tenants.find(t => t.id === editBtn.dataset.id));
   if (delBtn) {
-    if (confirm('Delete this tenant? This will not delete their past receipt history.')) {
+    if (confirm('Delete this tenant? This will not delete their past receipt history. This change is saved to your Google Sheet immediately.')) {
       tenants = tenants.filter(t => t.id !== delBtn.dataset.id);
-      save(KEYS.tenants, tenants);
-      autoSyncPush();
+      await persist();
       renderTenants(); renderHome();
     }
   }
@@ -477,7 +500,7 @@ function openTenantModal(tenant) {
 document.getElementById('cancelTenantBtn').addEventListener('click', () => {
   document.getElementById('tenantModalBackdrop').hidden = true;
 });
-document.getElementById('saveTenantBtn').addEventListener('click', () => {
+document.getElementById('saveTenantBtn').addEventListener('click', async () => {
   const name = document.getElementById('tName').value.trim();
   const nickname = document.getElementById('tNickname').value.trim();
   const phone = document.getElementById('tPhone').value.trim();
@@ -499,13 +522,12 @@ document.getElementById('saveTenantBtn').addEventListener('click', () => {
   } else {
     tenants.push({ id: uid(), ...fields });
   }
-  save(KEYS.tenants, tenants);
-  autoSyncPush();
+  const ok = await persist();
+  if (!ok) return;
   document.getElementById('tenantModalBackdrop').hidden = true;
   renderTenants(); renderHome();
 });
 
-/* ---------- history ---------- */
 function renderSummary() {
   const card = document.getElementById('summaryCard');
   const now = new Date();
@@ -556,7 +578,6 @@ function renderHistory() {
   });
 }
 
-/* ---------- tenant statement (print / save as PDF) ---------- */
 function populateStatementTenants() {
   const sel = document.getElementById('statementTenant');
   const prev = sel.value;
@@ -621,17 +642,17 @@ document.getElementById('printStatementBtn').addEventListener('click', () => {
   window.print();
 });
 
-/* ---------- settings ---------- */
-document.getElementById('scriptUrl').value = settings.scriptUrl || '';
-document.getElementById('reminderDays').value = settings.reminderDays || 3;
-document.getElementById('defaultCountryCode').value = settings.defaultCountryCode || '';
-document.getElementById('landlordName').value = settings.landlordName || '';
+function fillSettingsForm() {
+  document.getElementById('scriptUrl').value = scriptUrl || '';
+  document.getElementById('reminderDays').value = settings.reminderDays || 3;
+  document.getElementById('defaultCountryCode').value = settings.defaultCountryCode || '';
+  document.getElementById('landlordName').value = settings.landlordName || '';
+}
 
-document.getElementById('saveLandlordBtn').addEventListener('click', () => {
+document.getElementById('saveLandlordBtn').addEventListener('click', async () => {
   settings.landlordName = document.getElementById('landlordName').value.trim();
-  save(KEYS.settings, settings);
-  updateReceiptPreview();
-  alert('Saved.');
+  const ok = await persist();
+  if (ok) { updateReceiptPreview(); alert('Saved.'); }
 });
 
 document.getElementById('changePasswordBtn').addEventListener('click', async () => {
@@ -648,83 +669,57 @@ document.getElementById('changePasswordBtn').addEventListener('click', async () 
   if (next !== confirm) { status.textContent = "New password and confirmation don't match."; return; }
 
   settings.pwHash = await sha256(next);
-  save(KEYS.settings, settings);
+  const ok = await persist();
+  if (!ok) { status.textContent = 'Could not save the new password — try again.'; return; }
   document.getElementById('currentPassword').value = '';
   document.getElementById('newPassword').value = '';
   document.getElementById('confirmPassword').value = '';
   status.textContent = 'Password updated.';
 });
 
-document.getElementById('saveUrlBtn').addEventListener('click', () => {
-  settings.scriptUrl = document.getElementById('scriptUrl').value.trim();
-  save(KEYS.settings, settings);
-  updateSyncPill();
-  document.getElementById('syncStatus').textContent = 'Saved.';
+document.getElementById('saveUrlBtn').addEventListener('click', async () => {
+  const url = document.getElementById('scriptUrl').value.trim();
+  const status = document.getElementById('syncStatus');
+  if (!url) { status.textContent = 'Paste your Apps Script Web App URL first.'; return; }
+  status.textContent = 'Connecting…';
+  scriptUrl = url;
+  localStorage.setItem('rb_script_url', scriptUrl);
+  try {
+    await fetchAllFromSheet();
+    setSyncLabel('Synced with sheet', true);
+    status.textContent = 'Connected and loaded data from this sheet.';
+    renderTenants(); renderHome(); renderHistory();
+  } catch (err) {
+    setSyncLabel('Not connected', false);
+    status.textContent = 'Could not reach that sheet. Check the URL and that the script is deployed for "Anyone".';
+  }
 });
-document.getElementById('saveSettingsBtn').addEventListener('click', () => {
+
+document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
   settings.reminderDays = parseInt(document.getElementById('reminderDays').value, 10) || 3;
   settings.defaultCountryCode = document.getElementById('defaultCountryCode').value.trim();
-  save(KEYS.settings, settings);
-  renderHome(); renderTenants();
-  alert('Settings saved.');
+  const ok = await persist();
+  if (ok) { renderHome(); renderTenants(); alert('Settings saved.'); }
 });
-
-function updateSyncPill() {
-  const pill = document.getElementById('syncPill');
-  const label = document.getElementById('syncLabel');
-  if (settings.scriptUrl) { pill.classList.add('on'); label.textContent = 'Sheet connected'; }
-  else { pill.classList.remove('on'); label.textContent = 'Local only'; }
-}
-
-let autoSyncTimer = null;
-function autoSyncPush() {
-  if (!settings.scriptUrl) return;
-  clearTimeout(autoSyncTimer);
-  const label = document.getElementById('syncLabel');
-  autoSyncTimer = setTimeout(async () => {
-    try {
-      label.textContent = 'Syncing…';
-      await fetch(settings.scriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ tenants, receipts })
-      });
-      label.textContent = 'Sheet connected';
-    } catch (err) {
-      label.textContent = 'Sync failed — check connection';
-    }
-  }, 700);
-}
 
 document.getElementById('pushBtn').addEventListener('click', async () => {
   const status = document.getElementById('syncStatus');
-  if (!settings.scriptUrl) { status.textContent = 'Add and save your Apps Script URL first.'; return; }
-  status.textContent = 'Pushing...';
-  try {
-    await fetch(settings.scriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ tenants, receipts })
-    });
-    status.textContent = 'Pushed local data to the sheet.';
-  } catch (err) {
-    status.textContent = 'Could not reach the sheet. Check the URL and that the script is deployed for "Anyone".';
-  }
+  status.textContent = 'Syncing…';
+  const ok = await persist();
+  status.textContent = ok ? 'Synced to the sheet.' : 'Could not reach the sheet.';
 });
 
 document.getElementById('pullBtn').addEventListener('click', async () => {
   const status = document.getElementById('syncStatus');
-  if (!settings.scriptUrl) { status.textContent = 'Add and save your Apps Script URL first.'; return; }
-  status.textContent = 'Pulling...';
+  if (!scriptUrl) { status.textContent = 'Connect a sheet first.'; return; }
+  status.textContent = 'Refreshing…';
   try {
-    const res = await fetch(settings.scriptUrl, { method: 'GET' });
-    const data = await res.json();
-    if (data.tenants) { tenants = data.tenants; save(KEYS.tenants, tenants); }
-    if (data.receipts) { receipts = data.receipts; save(KEYS.receipts, receipts); }
+    await fetchAllFromSheet();
+    setSyncLabel('Synced with sheet', true);
     renderTenants(); renderHome(); renderHistory();
-    status.textContent = 'Pulled the latest data from the sheet.';
+    status.textContent = 'Refreshed from the sheet.';
   } catch (err) {
-    status.textContent = 'Could not reach the sheet. Check the URL.';
+    status.textContent = 'Could not reach the sheet. Check your connection.';
   }
 });
 
@@ -736,28 +731,26 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   a.click();
 });
 
-document.getElementById('wipeBtn').addEventListener('click', () => {
-  if (confirm('This erases all tenants and receipt history stored on this device. Continue?')) {
+document.getElementById('wipeBtn').addEventListener('click', async () => {
+  if (confirm('This permanently erases all tenants and receipt history in your connected Google Sheet — not just on this device. This cannot be undone. Continue?')) {
     tenants = []; receipts = [];
-    save(KEYS.tenants, tenants); save(KEYS.receipts, receipts);
-    autoSyncPush();
-    renderTenants(); renderHome(); renderHistory();
+    const ok = await persist();
+    if (ok) { renderTenants(); renderHome(); renderHistory(); }
   }
 });
 
-/* ---------- utils ---------- */
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* ---------- lock screen ---------- */
 async function sha256(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function initApp() {
-  updateSyncPill();
+  fillSettingsForm();
+  setSyncLabel('Synced with sheet', true);
   renderTenants();
   renderHome();
   renderHistory();
@@ -776,6 +769,7 @@ function unlockApp() {
 }
 
 function setupLockScreen() {
+  document.getElementById('lockScreen').hidden = false;
   const title = document.getElementById('lockTitle');
   const hint = document.getElementById('lockHint');
   const pwField = document.getElementById('lockPassword');
@@ -786,12 +780,12 @@ function setupLockScreen() {
 
   if (isSetup) {
     title.textContent = 'Set a password';
-    hint.textContent = 'Choose a password to protect this page on this device. Keep this app open next time or you may need to enter it again.';
+    hint.textContent = 'Choose a password to protect this page. It will be saved (as a hash) in your connected sheet, so it applies on any device that connects to it.';
     confirmField.hidden = false;
     submitBtn.textContent = 'Set password';
   } else {
     title.textContent = 'Enter password';
-    hint.textContent = 'This device is protected. Enter your password to continue.';
+    hint.textContent = 'This sheet is protected. Enter your password to continue.';
     confirmField.hidden = true;
     submitBtn.textContent = 'Unlock';
   }
@@ -805,7 +799,8 @@ function setupLockScreen() {
       if (!p1 || p1.length < 4) { errorEl.textContent = 'Password must be at least 4 characters.'; errorEl.hidden = false; return; }
       if (p1 !== p2) { errorEl.textContent = "Passwords don't match."; errorEl.hidden = false; return; }
       settings.pwHash = await sha256(p1);
-      save(KEYS.settings, settings);
+      const ok = await persist();
+      if (!ok) { errorEl.textContent = 'Could not save to the sheet — check your connection and try again.'; errorEl.hidden = false; return; }
       unlockApp();
     } else {
       const hash = await sha256(pwField.value);
@@ -823,4 +818,48 @@ function setupLockScreen() {
   pwField.focus();
 }
 
-setupLockScreen();
+function showConnectScreen(errorMsg) {
+  document.getElementById('lockScreen').hidden = true;
+  const cs = document.getElementById('connectScreen');
+  cs.hidden = false;
+  document.getElementById('connectUrl').value = scriptUrl || '';
+  const err = document.getElementById('connectError');
+  if (errorMsg) { err.textContent = errorMsg; err.hidden = false; } else { err.hidden = true; }
+  document.getElementById('connectUrl').focus();
+}
+
+async function tryConnectAndProceed() {
+  try {
+    await fetchAllFromSheet();
+    document.getElementById('connectScreen').hidden = true;
+    setupLockScreen();
+  } catch (err) {
+    showConnectScreen('Could not load your sheet. Check the URL, that the script is deployed for "Anyone", and your internet connection.');
+  }
+}
+
+document.getElementById('connectSubmitBtn').addEventListener('click', async () => {
+  const url = document.getElementById('connectUrl').value.trim();
+  const err = document.getElementById('connectError');
+  if (!url) { err.textContent = 'Paste your Apps Script Web App URL.'; err.hidden = false; return; }
+  scriptUrl = url;
+  localStorage.setItem('rb_script_url', scriptUrl);
+  err.hidden = true;
+  document.getElementById('connectSubmitBtn').textContent = 'Connecting…';
+  await tryConnectAndProceed();
+  document.getElementById('connectSubmitBtn').textContent = 'Connect';
+});
+document.getElementById('connectUrl').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('connectSubmitBtn').click();
+});
+
+async function boot() {
+  if (!scriptUrl) {
+    showConnectScreen();
+    return;
+  }
+  document.getElementById('connectScreen').hidden = true;
+  await tryConnectAndProceed();
+}
+
+boot();
