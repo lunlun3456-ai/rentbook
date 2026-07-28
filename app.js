@@ -132,9 +132,26 @@ function wrapText(ctx, text, maxWidth, maxLines) {
   return lines;
 }
 
+// For a given payment: how many days late it was (0 or negative = on time/early),
+// and when the next payment is due after this one.
+function receiptDueCalc(tenant, dateStr, period) {
+  const dueDay = Math.min(Math.max(parseInt(tenant.dueDay || 1, 10), 1), 28);
+  const paidDate = new Date(dateStr);
+  const dueForThisPayment = new Date(paidDate.getFullYear(), paidDate.getMonth(), dueDay);
+  const lateDays = Math.round((paidDate - dueForThisPayment) / 86400000);
+
+  let baseYear = paidDate.getFullYear(), baseMonth = paidDate.getMonth();
+  if (period) {
+    const [py, pm] = period.split('-').map(Number);
+    if (py && pm) { baseYear = py; baseMonth = pm - 1; }
+  }
+  const nextDue = new Date(baseYear, baseMonth + 1, dueDay);
+  return { lateDays, nextDue };
+}
+
 // Draws a professional-looking receipt onto a canvas and returns it.
 function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
-  const W = 720, H = 980;
+  const W = 720, H = 1060;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -193,6 +210,16 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   if (period) row('For period', fmtPeriod(period));
   if (note) row('Note', note);
 
+  const { lateDays, nextDue } = receiptDueCalc(tenant, dateStr, period);
+  if (lateDays > 0) {
+    label('Days overdue');
+    ctx.fillStyle = '#a83232';
+    ctx.font = '700 18px Arial, sans-serif';
+    ctx.fillText(`${lateDays} day${lateDays === 1 ? '' : 's'} overdue`, 40, y + 24);
+    y += 54;
+  }
+  row('Next payment due', fmtDate(nextDue));
+
   // dashed divider
   ctx.strokeStyle = '#d8cdb4';
   ctx.setLineDash([6, 6]);
@@ -202,6 +229,12 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   ctx.fillStyle = '#6b6455';
   ctx.font = 'italic 15px Georgia, "Times New Roman", serif';
   ctx.fillText('Thank you for your payment.', 40, y + 40);
+
+  // utility-bill notice
+  ctx.font = '12px Arial, sans-serif';
+  ctx.fillStyle = '#6b6455';
+  const noticeLines = wrapText(ctx, 'Tenants must pay utility bills on time to avoid service disruptions, late fees, and legal penalties.', W - 80, 3);
+  noticeLines.forEach((ln, i) => ctx.fillText(ln, 40, y + 70 + i * 18));
 
   // computer-generated note, pinned near the bottom (no signature required)
   const noteY = H - 60;
