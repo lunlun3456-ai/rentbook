@@ -1,4 +1,8 @@
+/* This attribute must always win over any element's own display rule —
+   without this, any element that sets display explicitly (flex, inline-block,
+   etc.) can silently ignore [hidden] and show up when it shouldn't. */
 [hidden]{ display: none !important; }
+
 :root{
   --paper: #f6f1e6;
   --paper-dark: #ece4d2;

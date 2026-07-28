@@ -2,7 +2,7 @@
   "name": "Rent Book — Receipts & Reminders",
   "short_name": "Rent Book",
   "start_url": "./index.html",
-  "display": "standalone",
+  "display": "minimal-ui",
   "background_color": "#ece4d2",
   "theme_color": "#1f4d43",
   "icons": [

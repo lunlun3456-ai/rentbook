@@ -317,7 +317,7 @@ function renderHome() {
         </div>
         <div class="sub">${fmtMoney(t, t.rent)} · due ${fmtDate(info.dueDate)}</div>
         <div class="card-actions">
-          <a class="btn btn-small" href="${waHref(t.phone, buildReminderText(t, info))}"  rel="noopener">Send reminder via WhatsApp</a>
+          <a class="btn btn-small" href="${waHref(t.phone, buildReminderText(t, info))}" rel="noopener">Send reminder via WhatsApp</a>
         </div>`;
       list.appendChild(el);
     } catch (err) {
