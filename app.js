@@ -24,12 +24,45 @@ function normalizeSettings(raw) {
   };
 }
 
+// Google Sheets returns any all-digit cell (phone numbers, IDs typed as
+// digits, etc.) as a JS number, not text — which breaks .replace() and
+// similar string methods elsewhere in the app. Coerce every field to the
+// type the rest of the app expects, right when data comes in from the sheet.
+function normalizeTenant(t) {
+  return {
+    id: String(t.id ?? ''),
+    name: String(t.name ?? ''),
+    nickname: String(t.nickname ?? ''),
+    phone: String(t.phone ?? ''),
+    rent: Number(t.rent) || 0,
+    currency: String(t.currency ?? '') || 'RM',
+    dueDay: parseInt(t.dueDay, 10) || 1,
+    unit: String(t.unit ?? ''),
+    ownerName: String(t.ownerName ?? ''),
+    leaseStart: String(t.leaseStart ?? ''),
+    leaseEnd: String(t.leaseEnd ?? ''),
+    renewalYears: Number(t.renewalYears) || 0
+  };
+}
+function normalizeReceipt(r) {
+  return {
+    id: String(r.id ?? ''),
+    tenantId: String(r.tenantId ?? ''),
+    tenantName: String(r.tenantName ?? ''),
+    amount: Number(r.amount) || 0,
+    date: String(r.date ?? ''),
+    period: String(r.period ?? ''),
+    note: String(r.note ?? ''),
+    sentAt: String(r.sentAt ?? '')
+  };
+}
+
 async function fetchAllFromSheet() {
   const res = await fetch(scriptUrl, { method: 'GET' });
   if (!res.ok) throw new Error('bad response');
   const data = await res.json();
-  tenants = data.tenants || [];
-  receipts = data.receipts || [];
+  tenants = (data.tenants || []).map(normalizeTenant);
+  receipts = (data.receipts || []).map(normalizeReceipt);
   settings = normalizeSettings(data.settings || {});
 }
 
@@ -135,7 +168,7 @@ function countdownHtml(tenant) {
 // is the one thing that consistently survives it, so every WhatsApp action
 // in this app renders as a genuine link rather than a JS-driven redirect.
 function waHref(phone, text) {
-  const cleanPhone = (phone || '').replace(/[^\d]/g, '');
+  const cleanPhone = String(phone || '').replace(/[^\d]/g, '');
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
 }
 
