@@ -58,6 +58,31 @@ function statusLabel(info) {
   return `due in ${info.daysUntil}d`;
 }
 
+// Compares a tenant's most recent receipt date against that month's due day.
+function lastPaymentStatus(tenant) {
+  const tReceipts = receipts.filter(r => r.tenantId === tenant.id).sort((a, b) => new Date(b.date) - new Date(a.date));
+  if (!tReceipts.length) return null;
+  const r = tReceipts[0];
+  const paidDate = new Date(r.date);
+  const dueDay = Math.min(Math.max(parseInt(tenant.dueDay || 1, 10), 1), 28);
+  const dueForThatMonth = new Date(paidDate.getFullYear(), paidDate.getMonth(), dueDay);
+  const diff = Math.round((paidDate - dueForThatMonth) / 86400000);
+  return { diff, date: paidDate };
+}
+
+function countdownHtml(tenant) {
+  const info = dueInfo(tenant);
+  const last = lastPaymentStatus(tenant);
+  let html = `<div>Next payment: <span class="big">${statusLabel(info)}</span> — ${fmtDate(info.dueDate)}</div>`;
+  if (last) {
+    const cls = last.diff < 0 ? 'paid-early' : (last.diff > 0 ? 'paid-late' : '');
+    const txt = last.diff < 0 ? `paid ${Math.abs(last.diff)} day(s) early`
+      : (last.diff > 0 ? `paid ${last.diff} day(s) late` : 'paid on time');
+    html += `<div class="${cls}">This month: ${txt} (${fmtDate(last.date)})</div>`;
+  }
+  return html;
+}
+
 /* ---------- WhatsApp helpers ---------- */
 function openWhatsApp(phone, text) {
   const cleanPhone = (phone || '').replace(/[^\d]/g, '');
@@ -67,16 +92,49 @@ function openWhatsApp(phone, text) {
 
 function fmtMoney(tenant, amount) {
   const n = Number(amount || 0);
-  return `${tenant.currency || ''} ${n.toFixed(2)}`.trim();
+  const formatted = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${tenant.currency || ''} ${formatted}`.trim();
 }
 function fmtDate(d) {
   const dt = (d instanceof Date) ? d : new Date(d);
   return dt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 }
+// "2026-08" -> "August 2026"
+function fmtPeriod(yyyyMm) {
+  if (!yyyyMm) return '';
+  const [y, m] = yyyyMm.split('-').map(Number);
+  if (!y || !m) return yyyyMm;
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+// wraps text to fit maxWidth, returns up to maxLines lines (last line gets an ellipsis if truncated)
+function wrapText(ctx, text, maxWidth, maxLines) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+      if (lines.length === maxLines) break;
+    } else {
+      line = test;
+    }
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+  if (lines.length === maxLines) {
+    let last = lines[maxLines - 1];
+    while (ctx.measureText(last + '…').width > maxWidth && last.length > 1) {
+      last = last.slice(0, -1);
+    }
+    if (words.join(' ').length > lines.join(' ').length) lines[maxLines - 1] = last + '…';
+  }
+  return lines;
+}
 
 // Draws a professional-looking receipt onto a canvas and returns it.
 function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
-  const W = 720, H = 900;
+  const W = 720, H = 980;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -105,21 +163,34 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
 
   // body rows
   let y = 190;
-  function row(label, value, big) {
+  function label(text) {
     ctx.fillStyle = '#6b6455';
     ctx.font = '12px Arial, sans-serif';
-    ctx.fillText(label.toUpperCase(), 40, y);
+    ctx.fillText(text.toUpperCase(), 40, y);
+  }
+  function row(labelText, value, big) {
+    label(labelText);
     ctx.fillStyle = '#26221b';
     ctx.font = big ? '700 30px Georgia, "Times New Roman", serif' : '600 18px Arial, sans-serif';
     ctx.fillText(String(value), 40, y + (big ? 34 : 24));
     y += big ? 70 : 54;
   }
 
-  row('Tenant', tenant.name);
-  if (tenant.unit) row('Unit / address', tenant.unit);
+  const tenantLine = tenant.nickname ? `${tenant.name}  (${tenant.nickname})` : tenant.name;
+  row('Tenant', tenantLine);
+
+  if (tenant.unit) {
+    label('Unit / address');
+    ctx.fillStyle = '#26221b';
+    ctx.font = '600 16px Arial, sans-serif';
+    const lines = wrapText(ctx, tenant.unit, W - 80, 4);
+    lines.forEach((ln, i) => ctx.fillText(ln, 40, y + 22 + i * 22));
+    y += 22 + lines.length * 22 + 14;
+  }
+
   row('Amount received', fmtMoney(tenant, amount), true);
   row('Date paid', fmtDate(dateStr));
-  if (period) row('For period', period);
+  if (period) row('For period', fmtPeriod(period));
   if (note) row('Note', note);
 
   // dashed divider
@@ -132,13 +203,11 @@ function drawReceiptCanvas(tenant, amount, dateStr, period, note, receiptNo) {
   ctx.font = 'italic 15px Georgia, "Times New Roman", serif';
   ctx.fillText('Thank you for your payment.', 40, y + 40);
 
-  // signature line, pinned near the bottom
-  const sigY = H - 90;
-  ctx.strokeStyle = '#26221b';
-  ctx.beginPath(); ctx.moveTo(40, sigY); ctx.lineTo(300, sigY); ctx.stroke();
+  // computer-generated note, pinned near the bottom (no signature required)
+  const noteY = H - 60;
   ctx.font = '12px Arial, sans-serif';
-  ctx.fillStyle = '#6b6455';
-  ctx.fillText('Landlord / agent signature', 40, sigY + 18);
+  ctx.fillStyle = '#8a8271';
+  ctx.fillText('This receipt is computer generated. No signature required.', 40, noteY);
 
   return canvas;
 }
@@ -199,8 +268,17 @@ document.getElementById('reminderList').addEventListener('click', (e) => {
 });
 
 /* ---------- receipt form ---------- */
-const receiptFields = ['receiptTenant', 'receiptAmount', 'receiptDate', 'receiptPeriod', 'receiptNote'];
+const receiptFields = ['receiptAmount', 'receiptDate', 'receiptPeriod', 'receiptNote'];
 receiptFields.forEach(id => document.getElementById(id).addEventListener('input', updateReceiptPreview));
+
+document.getElementById('receiptTenant').addEventListener('change', () => {
+  const t = currentReceiptTenant();
+  if (t) {
+    document.getElementById('receiptAmount').value = t.rent || '';
+    document.getElementById('receiptPeriod').value = defaultPeriodFor(t);
+  }
+  updateReceiptPreview();
+});
 
 function currentReceiptTenant() {
   const id = document.getElementById('receiptTenant').value;
@@ -209,13 +287,26 @@ function currentReceiptTenant() {
 
 let lastReceiptDataUrl = null;
 
+function defaultPeriodFor(tenant) {
+  const info = dueInfo(tenant);
+  const d = info.dueDate;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function updateReceiptPreview() {
   const t = currentReceiptTenant();
   const img = document.getElementById('receiptImg');
-  if (!t) { img.removeAttribute('src'); lastReceiptDataUrl = null; return; }
+  const countdownBox = document.getElementById('receiptCountdown');
+  if (!t) { img.removeAttribute('src'); lastReceiptDataUrl = null; countdownBox.innerHTML = ''; return; }
+
+  countdownBox.innerHTML = countdownHtml(t);
+
+  const periodField = document.getElementById('receiptPeriod');
+  if (!periodField.value) periodField.value = defaultPeriodFor(t);
+
   const amount = document.getElementById('receiptAmount').value || t.rent;
   const date = document.getElementById('receiptDate').value || todayISO();
-  const period = document.getElementById('receiptPeriod').value;
+  const period = periodField.value;
   const note = document.getElementById('receiptNote').value;
   const nextNo = String((settings.receiptCounter || 0) + 1).padStart(4, '0');
   const canvas = drawReceiptCanvas(t, amount, date, period, note, nextNo);
@@ -237,6 +328,7 @@ function recordReceiptAndAdvanceCounter(t, amount, date, period, note) {
   save(KEYS.receipts, receipts);
   settings.receiptCounter = (settings.receiptCounter || 0) + 1;
   save(KEYS.settings, settings);
+  autoSyncPush();
   renderHistory();
 }
 
@@ -288,14 +380,25 @@ function renderTenants() {
     const info = dueInfo(t);
     const el = document.createElement('div');
     el.className = 'card-item';
+    const nameLine = t.nickname ? `${escapeHtml(t.name)} <span class="muted">(${escapeHtml(t.nickname)})</span>` : escapeHtml(t.name);
+    let leaseLine = '';
+    if (t.leaseStart || t.leaseEnd) {
+      const parts = [];
+      if (t.leaseStart) parts.push(`from ${fmtDate(t.leaseStart)}`);
+      if (t.leaseEnd) parts.push(`to ${fmtDate(t.leaseEnd)}`);
+      if (t.renewalYears) parts.push(`renews every ${t.renewalYears}y`);
+      leaseLine = `<div class="sub">Lease: ${parts.join(' · ')}</div>`;
+    }
     el.innerHTML = `
       <div class="row-top">
-        <span class="name">${escapeHtml(t.name)}</span>
+        <span class="name">${nameLine}</span>
         <span class="status-chip status-${info.status === 'ok' ? 'ok' : (info.status === 'late' ? 'late' : 'soon')}">${statusLabel(info)}</span>
       </div>
       <div class="sub">${fmtMoney(t, t.rent)} / month · due day ${t.dueDay}${t.unit ? ' · ' + escapeHtml(t.unit) : ''}</div>
       <div class="sub">Owner on receipt: ${escapeHtml(t.ownerName || settings.landlordName || '—')}</div>
       <div class="sub">WhatsApp: +${escapeHtml(t.phone)}</div>
+      ${leaseLine}
+      <div class="countdown-box">${countdownHtml(t)}</div>
       <div class="card-actions">
         <button class="btn btn-small" data-action="edit" data-id="${t.id}">Edit</button>
         <button class="btn btn-small btn-danger" data-action="delete" data-id="${t.id}">Delete</button>
@@ -312,6 +415,7 @@ document.getElementById('tenantList').addEventListener('click', (e) => {
     if (confirm('Delete this tenant? This will not delete their past receipt history.')) {
       tenants = tenants.filter(t => t.id !== delBtn.dataset.id);
       save(KEYS.tenants, tenants);
+      autoSyncPush();
       renderTenants(); renderHome();
     }
   }
@@ -324,12 +428,16 @@ function openTenantModal(tenant) {
   editingTenantId = tenant ? tenant.id : null;
   document.getElementById('tenantModalTitle').textContent = tenant ? 'Edit tenant' : 'Add tenant';
   document.getElementById('tName').value = tenant ? tenant.name : '';
+  document.getElementById('tNickname').value = tenant ? (tenant.nickname || '') : '';
   document.getElementById('tPhone').value = tenant ? tenant.phone : (settings.defaultCountryCode || '');
   document.getElementById('tRent').value = tenant ? tenant.rent : '';
   document.getElementById('tCurrency').value = tenant ? tenant.currency : 'RM';
   document.getElementById('tDueDay').value = tenant ? tenant.dueDay : '';
   document.getElementById('tUnit').value = tenant ? (tenant.unit || '') : '';
   document.getElementById('tOwnerName').value = tenant ? (tenant.ownerName || '') : (settings.landlordName || '');
+  document.getElementById('tLeaseStart').value = tenant ? (tenant.leaseStart || '') : '';
+  document.getElementById('tLeaseEnd').value = tenant ? (tenant.leaseEnd || '') : '';
+  document.getElementById('tRenewalYears').value = tenant ? (tenant.renewalYears || '') : '';
   document.getElementById('tenantModalBackdrop').hidden = false;
 }
 document.getElementById('cancelTenantBtn').addEventListener('click', () => {
@@ -337,28 +445,63 @@ document.getElementById('cancelTenantBtn').addEventListener('click', () => {
 });
 document.getElementById('saveTenantBtn').addEventListener('click', () => {
   const name = document.getElementById('tName').value.trim();
+  const nickname = document.getElementById('tNickname').value.trim();
   const phone = document.getElementById('tPhone').value.trim();
   const rent = parseFloat(document.getElementById('tRent').value) || 0;
   const currency = document.getElementById('tCurrency').value.trim() || 'RM';
   const dueDay = parseInt(document.getElementById('tDueDay').value, 10) || 1;
   const unit = document.getElementById('tUnit').value.trim();
   const ownerName = document.getElementById('tOwnerName').value.trim();
+  const leaseStart = document.getElementById('tLeaseStart').value;
+  const leaseEnd = document.getElementById('tLeaseEnd').value;
+  const renewalYears = parseFloat(document.getElementById('tRenewalYears').value) || 0;
 
   if (!name || !phone) { alert('Name and WhatsApp number are required.'); return; }
 
+  const fields = { name, nickname, phone, rent, currency, dueDay, unit, ownerName, leaseStart, leaseEnd, renewalYears };
   if (editingTenantId) {
     const t = tenants.find(x => x.id === editingTenantId);
-    Object.assign(t, { name, phone, rent, currency, dueDay, unit, ownerName });
+    Object.assign(t, fields);
   } else {
-    tenants.push({ id: uid(), name, phone, rent, currency, dueDay, unit, ownerName });
+    tenants.push({ id: uid(), ...fields });
   }
   save(KEYS.tenants, tenants);
+  autoSyncPush();
   document.getElementById('tenantModalBackdrop').hidden = true;
   renderTenants(); renderHome();
 });
 
 /* ---------- history ---------- */
+function renderSummary() {
+  const card = document.getElementById('summaryCard');
+  const now = new Date();
+  const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  let allTime = 0, thisMonth = 0, thisMonthCount = 0;
+  receipts.forEach(r => {
+    const amt = Number(r.amount) || 0;
+    allTime += amt;
+    const paidDate = new Date(r.date);
+    const paidKey = `${paidDate.getFullYear()}-${String(paidDate.getMonth() + 1).padStart(2, '0')}`;
+    if (paidKey === thisMonthKey) { thisMonth += amt; thisMonthCount++; }
+  });
+
+  const outstanding = tenants
+    .filter(t => dueInfo(t).status !== 'ok')
+    .reduce((sum, t) => sum + (Number(t.rent) || 0), 0);
+
+  const money = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  card.innerHTML = `
+    <div class="stat"><span class="val">${money(thisMonth)}</span><span class="lbl">Collected this month (${thisMonthCount})</span></div>
+    <div class="stat"><span class="val">${money(allTime)}</span><span class="lbl">Collected all-time (${receipts.length})</span></div>
+    <div class="stat"><span class="val">${money(outstanding)}</span><span class="lbl">Outstanding right now</span></div>
+    <div class="stat"><span class="val">${tenants.length}</span><span class="lbl">Active tenants</span></div>
+  `;
+}
+
 function renderHistory() {
+  renderSummary();
   const list = document.getElementById('historyList');
   const emptyNote = document.getElementById('historyEmpty');
   list.innerHTML = '';
@@ -371,9 +514,9 @@ function renderHistory() {
     el.innerHTML = `
       <div class="row-top">
         <span class="name">${escapeHtml(r.tenantName)}</span>
-        <span class="amount">${escapeHtml(String(r.amount))}</span>
+        <span class="amount">${escapeHtml(Number(r.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}</span>
       </div>
-      <div class="sub">Paid ${fmtDate(r.date)}${r.period ? ' · ' + escapeHtml(r.period) : ''}</div>
+      <div class="sub">Paid ${fmtDate(r.date)}${r.period ? ' · ' + escapeHtml(fmtPeriod(r.period)) : ''}</div>
       ${r.note ? `<div class="sub">${escapeHtml(r.note)}</div>` : ''}`;
     list.appendChild(el);
   });
@@ -434,6 +577,26 @@ function updateSyncPill() {
   else { pill.classList.remove('on'); label.textContent = 'Local only'; }
 }
 
+let autoSyncTimer = null;
+function autoSyncPush() {
+  if (!settings.scriptUrl) return;
+  clearTimeout(autoSyncTimer);
+  const label = document.getElementById('syncLabel');
+  autoSyncTimer = setTimeout(async () => {
+    try {
+      label.textContent = 'Syncing…';
+      await fetch(settings.scriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ tenants, receipts })
+      });
+      label.textContent = 'Sheet connected';
+    } catch (err) {
+      label.textContent = 'Sync failed — check connection';
+    }
+  }, 700);
+}
+
 document.getElementById('pushBtn').addEventListener('click', async () => {
   const status = document.getElementById('syncStatus');
   if (!settings.scriptUrl) { status.textContent = 'Add and save your Apps Script URL first.'; return; }
@@ -478,6 +641,7 @@ document.getElementById('wipeBtn').addEventListener('click', () => {
   if (confirm('This erases all tenants and receipt history stored on this device. Continue?')) {
     tenants = []; receipts = [];
     save(KEYS.tenants, tenants); save(KEYS.receipts, receipts);
+    autoSyncPush();
     renderTenants(); renderHome(); renderHistory();
   }
 });
