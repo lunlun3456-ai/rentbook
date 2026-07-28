@@ -11,7 +11,18 @@
 </head>
 <body>
 
-<div class="lock-screen" id="lockScreen">
+<div class="lock-screen" id="connectScreen" hidden>
+  <div class="lock-card">
+    <span class="brand-mark lock-mark">RB</span>
+    <h2>Connect your Google Sheet</h2>
+    <p class="hint">Rent Book stores everything in your Google Sheet — nothing is saved on this device. Paste your Apps Script Web App URL to continue (see the README for how to set one up).</p>
+    <input type="url" id="connectUrl" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" />
+    <p class="lock-error" id="connectError" hidden></p>
+    <button class="btn btn-primary" id="connectSubmitBtn">Connect</button>
+  </div>
+</div>
+
+<div class="lock-screen" id="lockScreen" hidden>
   <div class="lock-card">
     <span class="brand-mark lock-mark">RB</span>
     <h2 id="lockTitle">Enter password</h2>
@@ -43,6 +54,7 @@
     <button class="tab active" data-tab="home">Home</button>
     <button class="tab" data-tab="tenants">Tenants</button>
     <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="statement">Statement</button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
 
@@ -124,6 +136,37 @@
       <p class="empty-note" id="historyEmpty" hidden>No receipts sent yet.</p>
     </section>
 
+    <!-- STATEMENT -->
+    <section class="panel" id="panel-statement">
+      <div class="section-head"><h2>Tenant statement</h2></div>
+
+      <div class="card no-print">
+        <label class="field">
+          <span>Tenant</span>
+          <select id="statementTenant"></select>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>From month</span>
+            <input type="month" id="statementFrom" />
+          </label>
+          <label class="field">
+            <span>To month</span>
+            <input type="month" id="statementTo" />
+          </label>
+        </div>
+        <div class="field-row">
+          <button class="btn" id="generateStatementBtn">Generate statement</button>
+          <button class="btn btn-primary" id="printStatementBtn">Print / Save as PDF</button>
+        </div>
+        <p class="hint">"Print / Save as PDF" opens your browser's print dialog — choose "Save as PDF" as the destination/printer to download it instead of printing.</p>
+      </div>
+
+      <div id="statementPrintArea">
+        <p class="empty-note" id="statementEmpty">Pick a tenant and a month range, then tap Generate.</p>
+      </div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="panel" id="panel-settings">
       <div class="section-head"><h2>Settings</h2></div>
@@ -158,16 +201,16 @@
       </div>
 
       <div class="card">
-        <h3>Google Sheet sync</h3>
-        <p class="hint">Paste the web app URL from your Google Apps Script (see README). Once saved, every add/edit/receipt syncs to the sheet automatically — no need to tap Push. Use the buttons below only to force a sync or to pull a fresh copy onto a new device.</p>
+        <h3>Connected Google Sheet</h3>
+        <p class="hint">Everything — tenants, receipts, and settings — lives in this sheet. Nothing is stored on this device except this URL, so it knows where to find your data.</p>
         <label class="field">
           <span>Apps Script Web App URL</span>
           <input type="url" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec" />
         </label>
         <div class="field-row">
-          <button class="btn" id="saveUrlBtn">Save</button>
-          <button class="btn" id="pushBtn">Force push</button>
-          <button class="btn" id="pullBtn">Pull Sheet → local</button>
+          <button class="btn" id="saveUrlBtn">Save &amp; reconnect</button>
+          <button class="btn" id="pullBtn">Refresh from sheet</button>
+          <button class="btn" id="pushBtn">Sync now</button>
         </div>
         <p class="hint" id="syncStatus"></p>
       </div>
@@ -189,7 +232,7 @@
         <h3>Data</h3>
         <div class="field-row">
           <button class="btn" id="exportBtn">Export backup (.json)</button>
-          <button class="btn btn-danger" id="wipeBtn">Erase all local data</button>
+          <button class="btn btn-danger" id="wipeBtn">Erase everything in the sheet</button>
         </div>
       </div>
     </section>
