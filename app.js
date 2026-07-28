@@ -1,3 +1,5 @@
+(function() {
+try {
 /* ---------- storage: everything lives in the Google Sheet ----------
    The ONLY thing kept on this device is the Apps Script URL itself —
    the app needs to know which sheet to talk to before it can load
@@ -866,3 +868,14 @@ async function boot() {
 }
 
 boot();
+
+} catch (err) {
+  console.error(err);
+  document.body.innerHTML = `<div style="padding:28px;font-family:sans-serif;max-width:600px;margin:0 auto;color:#26221b;background:#fffdf8;line-height:1.6;">
+    <h2 style="color:#a83232;">Rent Book failed to load</h2>
+    <p>There is a JavaScript error, most likely because index.html, style.css, and app.js are not all the same matching version.</p>
+    <p style="font-family:monospace;background:#f6f1e6;padding:12px;border-radius:6px;white-space:pre-wrap;">${(err && err.message) || err}</p>
+    <p>Re-copy all three files from the same version and try again.</p>
+  </div>`;
+}
+})();
