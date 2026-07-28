@@ -322,6 +322,11 @@ function renderHome() {
       list.appendChild(el);
     } catch (err) {
       console.error('Could not render reminder card for tenant:', t, err);
+      const errEl = document.createElement('div');
+      errEl.className = 'card-item';
+      errEl.style.borderColor = '#a83232';
+      errEl.innerHTML = `<div class="sub" style="color:#a83232">Couldn't show the reminder for "${escapeHtml((t && t.name) || 'a tenant')}" — error: ${escapeHtml(err && err.message || String(err))}</div>`;
+      list.appendChild(errEl);
     }
   });
 
@@ -478,6 +483,11 @@ function renderTenants() {
     list.appendChild(el);
    } catch (err) {
     console.error('Could not render tenant card:', t, err);
+    const errEl = document.createElement('div');
+    errEl.className = 'card-item';
+    errEl.style.borderColor = '#a83232';
+    errEl.innerHTML = `<div class="sub" style="color:#a83232">Couldn't show tenant "${escapeHtml((t && t.name) || 'unknown')}" — error: ${escapeHtml(err && err.message || String(err))}</div>`;
+    list.appendChild(errEl);
    }
   });
 }
