@@ -236,3 +236,29 @@ main{ padding: 18px 18px 10px; }
 .summary-card .stat{ display:flex; flex-direction:column; gap:2px; }
 .summary-card .stat .val{ font-family:var(--mono); font-size:19px; font-weight:700; color:var(--teal-deep); }
 .summary-card .stat .lbl{ font-size:11.5px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); }
+
+/* ---------- statement ---------- */
+#statementPrintArea{
+  background:#fffdf8; border:1px solid var(--line); border-radius:10px;
+  padding:22px 20px; margin-top:16px;
+}
+.statement-header{ display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid var(--teal); padding-bottom:12px; margin-bottom:16px; }
+.statement-header h2{ margin:0 0 4px; font-size:18px; color:var(--teal-deep); }
+.statement-header .sub{ font-size:12.5px; color:var(--ink-soft); }
+.statement-meta{ font-size:12.5px; color:var(--ink-soft); margin-bottom:16px; line-height:1.6; }
+.statement-table{ width:100%; border-collapse:collapse; font-size:13.5px; margin-bottom:16px; }
+.statement-table th, .statement-table td{ text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); }
+.statement-table th{ font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); }
+.statement-table td.num, .statement-table th.num{ text-align:right; font-family:var(--mono); }
+.statement-total{ display:flex; justify-content:flex-end; gap:24px; font-size:14px; padding-top:6px; }
+.statement-total .val{ font-family:var(--mono); font-weight:700; font-size:17px; color:var(--teal-deep); }
+
+@media print{
+  body{ background:#fff; }
+  .lock-screen, .no-print, .topbar, .tabs, .modal-backdrop{ display:none !important; }
+  .app{ display:block !important; max-width:100%; }
+  main{ padding:0; }
+  .panel{ display:none !important; }
+  #panel-statement{ display:block !important; }
+  #statementPrintArea{ border:none; padding:0; }
+}
