@@ -126,21 +126,15 @@ function countdownHtml(tenant) {
 }
 
 /* ---------- WhatsApp helpers ---------- */
-// existingWin: an already-opened window/tab (see the trick in the receipt handler
-// below) so mobile browsers don't block it after an async save finishes.
-function openWhatsApp(phone, text, existingWin) {
+// Installed "Add to Home Screen" apps often block ANY JavaScript-triggered
+// attempt to open another app (window.open, location.href to a custom
+// scheme, etc.) — this is an OS-level restriction, not something a script
+// can reliably work around. A real <a href> that the person taps themselves
+// is the one thing that consistently survives it, so every WhatsApp action
+// in this app renders as a genuine link rather than a JS-driven redirect.
+function waHref(phone, text) {
   const cleanPhone = (phone || '').replace(/[^\d]/g, '');
-  const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
-  if (existingWin && !existingWin.closed) {
-    existingWin.location.href = url;
-    return;
-  }
-  const win = window.open(url, '_blank');
-  if (!win) {
-    // window.open was blocked (common when installed as a home-screen app,
-    // since there's no tab bar to open into) — navigate this window instead.
-    window.location.href = url;
-  }
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
 }
 
 function fmtMoney(tenant, amount) {
@@ -320,7 +314,7 @@ function renderHome() {
       </div>
       <div class="sub">${fmtMoney(t, t.rent)} · due ${fmtDate(info.dueDate)}</div>
       <div class="card-actions">
-        <button class="btn btn-small" data-action="remind" data-id="${t.id}">Send reminder via WhatsApp</button>
+        <a class="btn btn-small" href="${waHref(t.phone, buildReminderText(t, info))}" target="_blank" rel="noopener">Send reminder via WhatsApp</a>
       </div>`;
     list.appendChild(el);
   });
@@ -331,14 +325,6 @@ function renderHome() {
   if (prevVal) sel.value = prevVal;
   updateReceiptPreview();
 }
-
-document.getElementById('reminderList').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-action="remind"]');
-  if (!btn) return;
-  const t = tenants.find(x => x.id === btn.dataset.id);
-  if (!t) return;
-  openWhatsApp(t.phone, buildReminderText(t, dueInfo(t)));
-});
 
 const receiptFields = ['receiptAmount', 'receiptDate', 'receiptPeriod', 'receiptNote'];
 receiptFields.forEach(id => document.getElementById(id).addEventListener('input', updateReceiptPreview));
@@ -369,6 +355,7 @@ function updateReceiptPreview() {
   const t = currentReceiptTenant();
   const img = document.getElementById('receiptImg');
   const countdownBox = document.getElementById('receiptCountdown');
+  document.getElementById('waLink').hidden = true;
   if (!t) { img.removeAttribute('src'); lastReceiptDataUrl = null; countdownBox.innerHTML = ''; return; }
 
   countdownBox.innerHTML = countdownHtml(t);
@@ -412,19 +399,15 @@ document.getElementById('sendReceiptBtn').addEventListener('click', async () => 
   const period = document.getElementById('receiptPeriod').value;
   const note = document.getElementById('receiptNote').value;
 
-  // Reserve a tab right now, synchronously, while this click still counts as
-  // a direct user action — mobile browsers (and installed home-screen apps
-  // especially) block window.open() if it happens after the save below finishes.
-  const waWin = window.open('', '_blank');
-
   const ok = await recordReceiptAndAdvanceCounter(t, amount, date, period, note);
-  if (!ok) { if (waWin) waWin.close(); return; }
+  if (!ok) return;
 
   alert(`Receipt for ${t.name} — ${fmtPeriod(period)} saved and synced to your sheet successfully.`);
 
   const text = `Hi ${t.name}, here's your rent receipt for ${fmtMoney(t, amount)} (${fmtDate(date)}). Attaching the receipt image now.`;
-  openWhatsApp(t.phone, text, waWin);
-  updateReceiptPreview();
+  const waLink = document.getElementById('waLink');
+  waLink.href = waHref(t.phone, text);
+  waLink.hidden = false;
 });
 
 document.getElementById('downloadReceiptBtn').addEventListener('click', () => {
