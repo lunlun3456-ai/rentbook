@@ -150,6 +150,9 @@ main{ padding: 18px 18px 10px; }
 }
 
 .btn{
+  display:inline-block;
+  text-align:center;
+  text-decoration:none;
   font-family: var(--sans);
   font-size: 13.5px;
   font-weight:600;
