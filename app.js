@@ -126,10 +126,21 @@ function countdownHtml(tenant) {
 }
 
 /* ---------- WhatsApp helpers ---------- */
-function openWhatsApp(phone, text) {
+// existingWin: an already-opened window/tab (see the trick in the receipt handler
+// below) so mobile browsers don't block it after an async save finishes.
+function openWhatsApp(phone, text, existingWin) {
   const cleanPhone = (phone || '').replace(/[^\d]/g, '');
   const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
-  window.open(url, '_blank');
+  if (existingWin && !existingWin.closed) {
+    existingWin.location.href = url;
+    return;
+  }
+  const win = window.open(url, '_blank');
+  if (!win) {
+    // window.open was blocked (common when installed as a home-screen app,
+    // since there's no tab bar to open into) — navigate this window instead.
+    window.location.href = url;
+  }
 }
 
 function fmtMoney(tenant, amount) {
@@ -387,8 +398,9 @@ async function recordReceiptAndAdvanceCounter(t, amount, date, period, note) {
     date, period, note, sentAt: new Date().toISOString()
   });
   settings.receiptCounter = (settings.receiptCounter || 0) + 1;
-  await persist();
+  const ok = await persist();
   renderHistory();
+  return ok;
 }
 
 document.getElementById('sendReceiptBtn').addEventListener('click', async () => {
@@ -400,10 +412,18 @@ document.getElementById('sendReceiptBtn').addEventListener('click', async () => 
   const period = document.getElementById('receiptPeriod').value;
   const note = document.getElementById('receiptNote').value;
 
-  await recordReceiptAndAdvanceCounter(t, amount, date, period, note);
+  // Reserve a tab right now, synchronously, while this click still counts as
+  // a direct user action — mobile browsers (and installed home-screen apps
+  // especially) block window.open() if it happens after the save below finishes.
+  const waWin = window.open('', '_blank');
+
+  const ok = await recordReceiptAndAdvanceCounter(t, amount, date, period, note);
+  if (!ok) { if (waWin) waWin.close(); return; }
+
+  alert(`Receipt for ${t.name} — ${fmtPeriod(period)} saved and synced to your sheet successfully.`);
 
   const text = `Hi ${t.name}, here's your rent receipt for ${fmtMoney(t, amount)} (${fmtDate(date)}). Attaching the receipt image now.`;
-  openWhatsApp(t.phone, text);
+  openWhatsApp(t.phone, text, waWin);
   updateReceiptPreview();
 });
 
