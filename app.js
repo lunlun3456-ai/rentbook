@@ -27,6 +27,7 @@ document.getElementById('tabs').addEventListener('click', (e) => {
   btn.classList.add('active');
   document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
   if (btn.dataset.tab === 'history') renderHistory();
+  if (btn.dataset.tab === 'statement') populateStatementTenants();
 });
 
 /* ---------- due-date logic ---------- */
@@ -554,6 +555,71 @@ function renderHistory() {
     list.appendChild(el);
   });
 }
+
+/* ---------- tenant statement (print / save as PDF) ---------- */
+function populateStatementTenants() {
+  const sel = document.getElementById('statementTenant');
+  const prev = sel.value;
+  sel.innerHTML = tenants.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+  if (prev) sel.value = prev;
+}
+
+function generateStatement() {
+  const tenantId = document.getElementById('statementTenant').value;
+  const t = tenants.find(x => x.id === tenantId);
+  const from = document.getElementById('statementFrom').value;
+  const to = document.getElementById('statementTo').value;
+  const area = document.getElementById('statementPrintArea');
+
+  if (!t) { area.innerHTML = '<p class="empty-note">Add a tenant first.</p>'; return; }
+  if (!from || !to) { area.innerHTML = '<p class="empty-note">Pick both a from-month and a to-month.</p>'; return; }
+
+  const rows = receipts
+    .filter(r => r.tenantId === t.id && r.period && r.period >= from && r.period <= to)
+    .sort((a, b) => a.period.localeCompare(b.period));
+
+  const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const money = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const rowsHtml = rows.length
+    ? rows.map(r => `
+        <tr>
+          <td>${escapeHtml(fmtPeriod(r.period))}</td>
+          <td>${fmtDate(r.date)}</td>
+          <td class="num">${money(Number(r.amount) || 0)}</td>
+          <td>${escapeHtml(r.note || '')}</td>
+        </tr>`).join('')
+    : `<tr><td colspan="4" style="color:var(--ink-soft)">No receipts recorded in this range.</td></tr>`;
+
+  area.innerHTML = `
+    <div class="statement-header">
+      <div>
+        <h2>${escapeHtml(t.ownerName || settings.landlordName || 'Rent Book')}</h2>
+        <div class="sub">Tenant statement</div>
+      </div>
+      <div class="sub">${fmtDate(new Date())}</div>
+    </div>
+    <div class="statement-meta">
+      <div><strong>Tenant:</strong> ${escapeHtml(t.name)}${t.nickname ? ' (' + escapeHtml(t.nickname) + ')' : ''}</div>
+      ${t.unit ? `<div><strong>Unit / address:</strong> ${escapeHtml(t.unit)}</div>` : ''}
+      <div><strong>Statement period:</strong> ${escapeHtml(fmtPeriod(from))} – ${escapeHtml(fmtPeriod(to))}</div>
+    </div>
+    <table class="statement-table">
+      <thead><tr><th>Period</th><th>Date paid</th><th class="num">Amount</th><th>Note</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="statement-total">
+      <span>Total collected</span>
+      <span class="val">${t.currency || ''} ${money(total)}</span>
+    </div>
+  `;
+}
+
+document.getElementById('generateStatementBtn').addEventListener('click', generateStatement);
+document.getElementById('printStatementBtn').addEventListener('click', () => {
+  generateStatement();
+  window.print();
+});
 
 /* ---------- settings ---------- */
 document.getElementById('scriptUrl').value = settings.scriptUrl || '';
